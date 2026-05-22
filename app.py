@@ -19,8 +19,8 @@ app = Flask(__name__)
 # -----------------------------------
 # المفاتيح (داخل الكود)
 # -----------------------------------
-BOT_TOKEN = "8899195686:AAHNrrwPz6PF10JaXmRN2NB1jTYipmqBrQy"
-GEMINI_API_KEY = "حAIzaSyDGqeUCBd5qF8zDphOrWL8y98GHWcmApRk"
+BOT_TOKEN = "8928733815:AAEzuZ6PWeN4piUDXkA2mY0j7Em74oBwc3E"
+GEMINI_API_KEY = "AIzaSyDGqeUCBd5qF8zDphOrWL8y98GHWcmApRk"
 
 # -----------------------------------
 # Telegram API
