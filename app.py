@@ -2,34 +2,36 @@ import os
 import threading
 from flask import Flask
 import telebot
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
-# وضع البيانات مباشرة لضمان العمل
+# البيانات الخاصة بك
 BOT_TOKEN = "8928733815:AAEzuZ6PWeN4piUDXkA2mY0j7Em74oBwc3E"
 GEMINI_API_KEY = "AIzaSyDGqeUCBd5qF8zDphOrWL8y98GHWcmApRk"
 
-# تهيئة البوت وتحديد إعدادات واجهة جيميناي للإصدار المستقر v1
+# تهيئة البوت والعميل الجديد لجيميناي (نسخة 2.0)
 bot = telebot.TeleBot(BOT_TOKEN)
-genai.configure(api_key=GEMINI_API_KEY, client_options={"api_version": "v1"})
-
-# استخدام النموذج الأساسي المستقر
-model = genai.GenerativeModel('gemini-pro')
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 # إعداد سيرفر Flask لمنع وضع النوم في Render
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Vertex Coding Bot is Active! 🚀"
+    return "Vertex Coding Bot 2.0 is Active! 🚀"
 
-# معالجة الرسائل والرد بالأكواد
+# معالجة الرسائل والرد بالأكواد باستخدام النموذج الجديد 2.5
 @bot.message_handler(func=lambda message: True)
 def reply_with_code(message):
     try:
-        # توجيه مدمج مباشرة مع الرسالة
+        # صياغة الطلب مع التوجيه المباشر
         prompt = f"أنت مبرمج محترف وخبير خوارزميات. اكتب كوداً برمجياً واشرحه باختصار رداً على الطلب التالي:\n\n{message.text}"
         
-        response = model.generate_content(prompt)
+        # استدعاء الجيل الجديد من جيميناي
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=prompt,
+        )
         bot.reply_to(message, response.text)
     except Exception as e:
         print(f"Error: {e}")
@@ -37,7 +39,7 @@ def reply_with_code(message):
 
 # دالة تشغيل البوت في الخلفية مستمر
 def run_bot():
-    print("Vertex Coding Bot Started...")
+    print("Vertex Coding Bot 2.0 Started...")
     bot.infinity_polling(timeout=10, long_polling_timeout=5)
 
 if __name__ == "__main__":
