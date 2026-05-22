@@ -12,15 +12,8 @@ GEMINI_API_KEY = "AIzaSyDGqeUCBd5qF8zDphOrWL8y98GHWcmApRk"
 bot = telebot.TeleBot(BOT_TOKEN)
 genai.configure(api_key=GEMINI_API_KEY)
 
-# استخدام النموذج الجديد والمستقر مع ضبط حرارة الأكواد والتعليمات بالطريقة الصحيحة
-model = genai.GenerativeModel(
-    model_name='gemini-1.5-flash',
-    generation_config={
-        "temperature": 0.2,
-        "response_mime_type": "text/plain"
-    },
-    system_instruction="أنت مبرمج محترف وخبير خوارزميات. وظيفتك الوحيدة هي كتابة الأكواد والأوامر البرمجية وشرحها باختصار شديد ومباشر دون مقدمات طويلة."
-)
+# استخدام النموذج المتوافق مع كافة الإصدارات القديمة
+model = genai.GenerativeModel('gemini-pro')
 
 # إعداد سيرفر Flask لمنع وضع النوم
 app = Flask(__name__)
@@ -33,8 +26,11 @@ def home():
 @bot.message_handler(func=lambda message: True)
 def reply_with_code(message):
     try:
-        # إرسال طلب المستخدم إلى جيميناي
-        response = model.generate_content(message.text)
+        # صياغة التوجيه مدمجاً مع طلب المستخدم مباشرة لضمان عمل نظام خبير الأكواد
+        prompt = f"أنت مبرمج محترف وخبير خوارزميات. اكتب كوداً برمجياً واشرحه باختصار شديد ومباشر رداً على الطلب التالي:\n\n{message.text}"
+        
+        # إرسال الطلب إلى جيميناي
+        response = model.generate_content(prompt)
         bot.reply_to(message, response.text)
     except Exception as e:
         print(f"Error: {e}")
