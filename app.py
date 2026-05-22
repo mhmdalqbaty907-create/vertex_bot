@@ -4,7 +4,7 @@ from flask import Flask
 import telebot
 import google.generativeai as genai
 
-# وضع البيانات الحالية مباشرة لضمان العمل بدون تعقيدات
+# وضع البيانات الحالية مباشرة لضمان العمل
 BOT_TOKEN = "8928733815:AAEzuZ6PWeN4piUDXkA2mY0j7Em74oBwc3E"
 GEMINI_API_KEY = "AIzaSyDGqeUCBd5qF8zDphOrWL8y98GHWcmApRk"
 
@@ -12,14 +12,17 @@ GEMINI_API_KEY = "AIzaSyDGqeUCBd5qF8zDphOrWL8y98GHWcmApRk"
 bot = telebot.TeleBot(BOT_TOKEN)
 genai.configure(api_key=GEMINI_API_KEY)
 
-# توجيه جيميناي ليتصرف كخبير مخصص لكتابة الأكواد والأوامر البرمجية فقط
+# استخدام النموذج الجديد والمستقر مع ضبط حرارة الأكواد والتعليمات بالطريقة الصحيحة
 model = genai.GenerativeModel(
-    model_name='gemini-pro',
-    generation_config={"temperature": 0.2}, # درجة حرارة منخفضة لضمان دقة الأكواد
+    model_name='gemini-1.5-flash',
+    generation_config={
+        "temperature": 0.2,
+        "response_mime_type": "text/plain"
+    },
     system_instruction="أنت مبرمج محترف وخبير خوارزميات. وظيفتك الوحيدة هي كتابة الأكواد والأوامر البرمجية وشرحها باختصار شديد ومباشر دون مقدمات طويلة."
 )
 
-# إعداد سيرفر Flask لإرضاء منصة Render ومنع وضع النوم
+# إعداد سيرفر Flask لمنع وضع النوم
 app = Flask(__name__)
 
 @app.route('/')
@@ -35,7 +38,7 @@ def reply_with_code(message):
         bot.reply_to(message, response.text)
     except Exception as e:
         print(f"Error: {e}")
-        bot.reply_to(message, "عذرًا يا صديقي، حدث خطأ أثناء توليد الكود. تأكد من سلامة المفاتيح.")
+        bot.reply_to(message, f"حدث خطأ في النظام: {e}")
 
 # دالة تشغيل البوت في الخلفية مستمر
 def run_bot():
