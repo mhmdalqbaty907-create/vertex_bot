@@ -1,114 +1,208 @@
 import os
-from flask import Flask, request, jsonify
+import asyncio
+from flask import Flask, request
+
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters
+)
+
 import google.generativeai as genai
+
+# =========================
+# إعدادات
+# =========================
+
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+genai.configure(api_key=GEMINI_API_KEY)
+
+model = genai.GenerativeModel("gemini-1.5-flash")
 
 app = Flask(__name__)
 
-# التوكنات الخاصة بك
-TELEGRAM_TOKEN = "8928733815:AAEzuZ6PWeN4piUDXkA2mY0j7Em74oBwc3E"
-GEMINI_API_KEY = "AIzaSyDGqeUCBd5qF8zDphOrWL8y98GHWcmApRk"
-
-# إعداد جيميناي والتليجرام
-genai.configure(api_key=GEMINI_API_KEY)
 telegram_app = Application.builder().token(TELEGRAM_TOKEN).build()
 
-# قاموس لحفظ جلسات الدردشة لكل مستخدم في ذاكرة السيرفر مباشرة (RAM) لسرعة خارقة وحماية من الانهيار
-# الذاكرة مستمرة دائماً وتتحمل ضغط الرسائل دون الحاجة لملفات داتا
-user_chats = {}
+# =========================
+# ذاكرة بسيطة وآمنة
+# =========================
 
-system_instruction = (
-    "أنت مستشار تقني خبير ومختصر جداً ومباشر ودقيق. "
-    "مهمتك الأساسية هي أخذ فكرة مشروع أو تطبيق وتقسيمها إلى خطوات عملية مفصلة ولكن باختصار شديد. "
-    "إذا كانت هذه فكرة جديدة، قم بصياغة خطة مقسمة كـ (الخطوة 1، الخطوة 2، إلخ) ولكن أرسل للمستخدم 'الخطوة الأولى فقط' وانتظره حتى ينتهي منها. "
-    "إذا أخبرك المستخدم أنه 'خلص' أو 'انتهى من الخطوة' انتقل فوراً وبذكاء للخطوة التالية بأسلوب مشجع ومختصر. "
-    "للاستفسارات العامة، اذكر دائماً الرقم 78239526 للاتصال."
-)
+user_memories = {}
+
+MAX_HISTORY = 12
+
+SYSTEM_PROMPT = """
+أنت خبير تقني ذكي ومختصر.
+
+- اشرح خطوة خطوة.
+- لا تعطِ المستخدم 20 خطوة دفعة واحدة.
+- أعطه خطوة واحدة فقط ثم انتظر.
+- كن عملي جداً.
+- إذا كانت الخطة سيئة أخبره مباشرة.
+- ركز على الحلول المجانية والخفيفة.
+"""
+
+# =========================
+# أدوات مساعدة
+# =========================
+
+def build_prompt(user_id, user_text):
+    history = user_memories.get(user_id, [])
+
+    history_text = ""
+
+    for item in history:
+        history_text += f"{item['role']}: {item['text']}\n"
+
+    return f"""
+{SYSTEM_PROMPT}
+
+سجل المحادثة:
+{history_text}
+
+رسالة المستخدم:
+{user_text}
+"""
+
+
+def save_memory(user_id, role, text):
+    if user_id not in user_memories:
+        user_memories[user_id] = []
+
+    user_memories[user_id].append({
+        "role": role,
+        "text": text
+    })
+
+    # قص الذاكرة
+    user_memories[user_id] = user_memories[user_id][-MAX_HISTORY:]
+
+
+async def send_long_message(message, text):
+    limit = 4000
+
+    for i in range(0, len(text), limit):
+        await message.reply_text(text[i:i+limit])
+
+
+# =========================
+# أوامر
+# =========================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_name = update.effective_user.first_name
-    welcome_text = (
-        f"أهلاً بك يا {user_name} في بوت التخطيط الذكي للمشاريع! 🚀\n\n"
-        "💡 ميزاتي الأساسية:\n"
-        "1️⃣ أعطني فكرة مشروع وسأعطيك خطوات تنفيذية مختصرة خطوة بخطوة.\n"
-        "2️⃣ أحفظ سياق محادثتنا بالكامل لتكمل في أي وقت.\n"
-        "3️⃣ يمكنك إرسال صور لتحليلها ومناقشتها.\n\n"
-        "🛠 التحكم بالذاكرة:\n"
-        "🔄 أرسل 'تحديث الذاكرة' لمسح التاريخ والبدء من جديد.\n"
-        "📞 للاستفسارات والدعم، تواصل معنا على الرقم: 78239526"
-    )
-    await update.message.reply_text(welcome_text)
+
+    user_memories[update.effective_user.id] = []
+
+    text = """
+🚀 أهلاً بك في Vertex Bot
+
+أرسل:
+- فكرة مشروع
+- كود
+- صورة
+- مشكلة برمجية
+
+وسأساعدك خطوة بخطوة.
+"""
+
+    await update.message.reply_text(text)
+
+
+async def reset_memory(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    user_memories[update.effective_user.id] = []
+
+    await update.message.reply_text("🧹 تم تصفير الذاكرة.")
+
+
+# =========================
+# الرسائل
+# =========================
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_text = update.message.text.strip() if update.message.text else ""
-    
-    # إعادة تهيئة الذاكرة إذا طلب المستخدم
-    if user_text == "تحديث الذاكرة":
-        if user_id in user_chats:
-            del user_chats[user_id]
-        await update.message.reply_text("🔄 تم تحديث وتهيئة الذاكرة بنجاح! يمكنك بدء مشروع جديد الآن.")
-        return
 
-    # استقبال وتحميل الصور
-    photo_bytes = None
-    if update.message.photo:
-        photo_file = await update.message.photo[-1].get_file()
-        photo_bytes = await photo_file.download_as_bytearray()
+    user_id = update.effective_user.id
+
+    user_text = update.message.text or ""
 
     try:
-        # إذا كان مستخدم جديد، نفتح له جلسة دردشة مستمرة في الذاكرة لأول مرة
-        if user_id not in user_chats:
-            model = genai.GenerativeModel(
-                model_name='gemini-1.5-flash',
-                system_instruction=system_instruction
-            )
-            user_chats[user_id] = model.start_chat(history=[])
 
-        chat_session = user_chats[user_id]
+        prompt = build_prompt(user_id, user_text)
 
-        if photo_bytes:
-            # تحليل الصور مع ربطها بالسياق
-            image_parts = [{"mime_type": "image/jpeg", "data": bytes(photo_bytes)}]
-            prompt = [user_text if user_text else "حلل هذه الصورة بدقة واختصار واربطها بمشروعنا.", image_parts]
-            response = chat_session.send_message(prompt)
-        else:
-            # التعامل الذكي مع إنهاء الخطوات
-            if any(word in user_text for word in ["خلصت", "انتهيت", "التالي", "الخطوة التالية"]):
-                user_text = "لقد انتهيت من الخطوة الحالية. اعطني الخطوة التالية المباشرة والمختصرة بناءً على خطتنا."
-            
-            response = chat_session.send_message(user_text)
+        response = model.generate_content(prompt)
 
-        reply_text = response.text
+        reply = response.text
+
+        save_memory(user_id, "user", user_text)
+        save_memory(user_id, "assistant", reply)
+
+        await send_long_message(update.message, reply)
 
     except Exception as e:
-        # إذا حدث أي خطأ مفاجئ، البوت يقوم بإصلاح نفسه تلقائياً دون إزعاج المستخدم
-        try:
-            model = genai.GenerativeModel(model_name='gemini-1.5-flash', system_instruction=system_instruction)
-            user_chats[user_id] = model.start_chat(history=[])
-            response = user_chats[user_id].send_message(user_text)
-            reply_text = response.text
-        except:
-            reply_text = "📞 أهلاً بك يا غالي، يرجى إعادة إرسال رسالتك الآن، أو تواصل معنا للاستفسار على الرقم: 78239526"
 
-    await update.message.reply_text(reply_text)
+        print("ERROR:", e)
 
-# تفعيل الرد على أي رسالة (نصوص أو صور)
+        await update.message.reply_text(
+            "⚠️ حصل خطأ مؤقت. أرسل الرسالة مرة ثانية."
+        )
+
+
+# =========================
+# handlers
+# =========================
+
 telegram_app.add_handler(CommandHandler("start", start))
-telegram_app.add_handler(MessageHandler(filters.TEXT | filters.PHOTO, handle_message))
+telegram_app.add_handler(CommandHandler("new", reset_memory))
 
-@app.route('/webhook', methods=['POST'])
+telegram_app.add_handler(
+    MessageHandler(
+        filters.TEXT & ~filters.COMMAND,
+        handle_message
+    )
+)
+
+# =========================
+# flask routes
+# =========================
+
+@app.route("/")
+def home():
+    return "Vertex Bot Running 🚀"
+
+
+@app.route("/webhook", methods=["POST"])
 async def webhook():
-    if request.method == "POST":
-        update = Update.de_json(request.get_json(force=True), telegram_app.bot)
-        await telegram_app.initialize()
-        await telegram_app.process_update(update)
-        return jsonify({"status": "success"}), 200
 
-@app.route('/')
-def index():
-    return "البوت شغال بأعلى سرعة ومستحيل ينام أو ينسى! 🔥", 200
+    data = request.get_json(force=True)
 
-if __name__ == '__main__':
-    app.run(port=5000)
+    update = Update.de_json(data, telegram_app.bot)
+
+    await telegram_app.process_update(update)
+
+    return "ok"
+
+
+# =========================
+# startup
+# =========================
+
+async def startup():
+    await telegram_app.initialize()
+
+
+asyncio.run(startup())
+
+# =========================
+# run
+# =========================
+
+if __name__ == "__main__":
+
+    port = int(os.environ.get("PORT", 10000))
+
+    app.run(host="0.0.0.0", port=port)
