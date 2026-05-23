@@ -1,7 +1,6 @@
 import os
-import asyncio
-from flask import Flask, request
 
+from fastapi import FastAPI, Request
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -12,46 +11,56 @@ from telegram.ext import (
 )
 
 import google.generativeai as genai
+import uvicorn
 
-# =========================
-# إعدادات
-# =========================
+# =====================
+# ENV
+# =====================
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+# =====================
+# Gemini
+# =====================
 
 genai.configure(api_key=GEMINI_API_KEY)
 
 model = genai.GenerativeModel("gemini-1.5-flash")
 
-app = Flask(__name__)
+# =====================
+# FastAPI
+# =====================
 
-telegram_app = Application.builder().token(TELEGRAM_TOKEN).build()
+app = FastAPI()
 
-# =========================
-# ذاكرة بسيطة وآمنة
-# =========================
+telegram_app = Application.builder().token(
+    TELEGRAM_TOKEN
+).build()
+
+# =====================
+# Memory
+# =====================
 
 user_memories = {}
 
-MAX_HISTORY = 12
+MAX_HISTORY = 10
 
 SYSTEM_PROMPT = """
-أنت خبير تقني ذكي ومختصر.
+أنت مساعد تقني ذكي ومختصر.
 
-- اشرح خطوة خطوة.
-- لا تعطِ المستخدم 20 خطوة دفعة واحدة.
-- أعطه خطوة واحدة فقط ثم انتظر.
-- كن عملي جداً.
-- إذا كانت الخطة سيئة أخبره مباشرة.
-- ركز على الحلول المجانية والخفيفة.
+- اشرح خطوة خطوة
+- لا تكثر كلام
+- كن عملي
+- ركز على الحلول المجانية
 """
 
-# =========================
-# أدوات مساعدة
-# =========================
+# =====================
+# Helpers
+# =====================
 
-def build_prompt(user_id, user_text):
+def build_prompt(user_id, text):
+
     history = user_memories.get(user_id, [])
 
     history_text = ""
@@ -62,15 +71,16 @@ def build_prompt(user_id, user_text):
     return f"""
 {SYSTEM_PROMPT}
 
-سجل المحادثة:
+السجل:
 {history_text}
 
 رسالة المستخدم:
-{user_text}
+{text}
 """
 
 
 def save_memory(user_id, role, text):
+
     if user_id not in user_memories:
         user_memories[user_id] = []
 
@@ -79,85 +89,66 @@ def save_memory(user_id, role, text):
         "text": text
     })
 
-    # قص الذاكرة
     user_memories[user_id] = user_memories[user_id][-MAX_HISTORY:]
 
 
 async def send_long_message(message, text):
-    limit = 4000
 
-    for i in range(0, len(text), limit):
-        await message.reply_text(text[i:i+limit])
+    LIMIT = 4000
 
+    for i in range(0, len(text), LIMIT):
+        await message.reply_text(text[i:i+LIMIT])
 
-# =========================
-# أوامر
-# =========================
+# =====================
+# Commands
+# =====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_memories[update.effective_user.id] = []
 
-    text = """
-🚀 أهلاً بك في Vertex Bot
+    await update.message.reply_text(
+        "🚀 Vertex Bot جاهز.\n\nأرسل فكرتك."
+    )
 
-أرسل:
-- فكرة مشروع
-- كود
-- صورة
-- مشكلة برمجية
-
-وسأساعدك خطوة بخطوة.
-"""
-
-    await update.message.reply_text(text)
-
-
-async def reset_memory(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    user_memories[update.effective_user.id] = []
-
-    await update.message.reply_text("🧹 تم تصفير الذاكرة.")
-
-
-# =========================
-# الرسائل
-# =========================
+# =====================
+# Main Handler
+# =====================
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_id = update.effective_user.id
 
-    user_text = update.message.text or ""
+    text = update.message.text
 
     try:
 
-        prompt = build_prompt(user_id, user_text)
+        prompt = build_prompt(user_id, text)
 
         response = model.generate_content(prompt)
 
         reply = response.text
 
-        save_memory(user_id, "user", user_text)
+        save_memory(user_id, "user", text)
         save_memory(user_id, "assistant", reply)
 
         await send_long_message(update.message, reply)
 
     except Exception as e:
 
-        print("ERROR:", e)
+        print(e)
 
         await update.message.reply_text(
-            "⚠️ حصل خطأ مؤقت. أرسل الرسالة مرة ثانية."
+            "⚠️ حصل خطأ مؤقت."
         )
 
+# =====================
+# Handlers
+# =====================
 
-# =========================
-# handlers
-# =========================
-
-telegram_app.add_handler(CommandHandler("start", start))
-telegram_app.add_handler(CommandHandler("new", reset_memory))
+telegram_app.add_handler(
+    CommandHandler("start", start)
+)
 
 telegram_app.add_handler(
     MessageHandler(
@@ -166,43 +157,53 @@ telegram_app.add_handler(
     )
 )
 
-# =========================
-# flask routes
-# =========================
+# =====================
+# Startup
+# =====================
 
-@app.route("/")
-def home():
-    return "Vertex Bot Running 🚀"
+@app.on_event("startup")
+async def startup():
+
+    await telegram_app.initialize()
+
+# =====================
+# Routes
+# =====================
+
+@app.get("/")
+async def home():
+
+    return {
+        "status": "running"
+    }
 
 
-@app.route("/webhook", methods=["POST"])
-async def webhook():
+@app.post("/webhook")
+async def webhook(request: Request):
 
-    data = request.get_json(force=True)
+    data = await request.json()
 
-    update = Update.de_json(data, telegram_app.bot)
+    update = Update.de_json(
+        data,
+        telegram_app.bot
+    )
 
     await telegram_app.process_update(update)
 
-    return "ok"
+    return {
+        "ok": True
+    }
 
-
-# =========================
-# startup
-# =========================
-
-async def startup():
-    await telegram_app.initialize()
-
-
-asyncio.run(startup())
-
-# =========================
-# run
-# =========================
+# =====================
+# Run
+# =====================
 
 if __name__ == "__main__":
 
     port = int(os.environ.get("PORT", 10000))
 
-    app.run(host="0.0.0.0", port=port)
+    uvicorn.run(
+        "app:app",
+        host="0.0.0.0",
+        port=port
+    )
