@@ -1,6 +1,7 @@
 import os
 import json
 import threading
+import traceback
 
 from fastapi import FastAPI, Request
 from telegram import Update
@@ -14,34 +15,37 @@ from telegram.ext import (
 import google.generativeai as genai
 import uvicorn
 
-# ========= بيانات البيئة ===========
+# ===================  متغيرات البيئة
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+print("TOKEN =", TELEGRAM_TOKEN)
+print("GEMINI =", GEMINI_API_KEY)
+
+if not TELEGRAM_TOKEN:
+    print("❌ خطأ: متغير البيئة TELEGRAM_TOKEN غير معرف!")
+if not GEMINI_API_KEY:
+    print("❌ خطأ: متغير البيئة GEMINI_API_KEY غير معرف!")
 
 MEMORY_FILE = "data.json"
 MAX_HISTORY = 10
 
-# =======================
-# Gemini AI
-# =======================
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-1.5-flash")
+# ========== Gemini
+try:
+    genai.configure(api_key=GEMINI_API_KEY)
+    model = genai.GenerativeModel("gemini-1.5-flash")
+except Exception as e:
+    print("❌ خطأ في إعداد Gemini:", e)
+    traceback.print_exc()
 
-# =======================
-# FastAPI و Telegram
-# =======================
-app = FastAPI()
-telegram_app = Application.builder().token(TELEGRAM_TOKEN).build()
-
-# =======================
-# الذاكرة (من ملف JSON)
-# =======================
+# ========== ذاكرة/سجل المستخدمين
 def load_memory():
     if os.path.exists(MEMORY_FILE):
         with open(MEMORY_FILE, "r", encoding="utf8") as f:
             try:
                 return json.load(f)
-            except:
+            except Exception as e:
+                print("❌ خطأ في قراءة ملف data.json:", e)
                 return {"users": {}}
     else:
         return {"users": {}}
@@ -61,13 +65,13 @@ def append_memory(user_id, role, text):
     if uid not in memory["users"]:
         memory["users"][uid] = []
     memory["users"][uid].append({"role": role, "text": text})
-    # احتفظ بآخر MAX_HISTORY فقط
     memory["users"][uid] = memory["users"][uid][-MAX_HISTORY:]
     save_memory_file(memory)
 
-# =======================
-# إعدادات البوت
-# =======================
+# ========== FastAPI و Telegram
+app = FastAPI()
+telegram_app = Application.builder().token(TELEGRAM_TOKEN).build()
+
 SYSTEM_PROMPT = """
 أنت مساعد تقني ذكي ومختصر.
 - اشرح خطوة خطوة
@@ -93,9 +97,8 @@ async def send_long_message(message, text):
     for i in range(0, len(text), LIMIT):
         await message.reply_text(text[i:i+LIMIT])
 
-# ========== Handlers ===========
+# ========== Handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # كل بدء يعيد الذاكرة
     uid = str(update.effective_user.id)
     memory["users"][uid] = []
     save_memory_file(memory)
@@ -105,29 +108,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text
     try:
+        print(f"📥 رسالة من {user_id}: {text}")
         prompt = build_prompt(user_id, text)
+        print(f"🤖 prompt إلى Gemini:\n{prompt}")
         response = model.generate_content(prompt)
         reply = response.text
-
+        print(f"✅ Gemini رد بـ:\n{reply}")
         append_memory(user_id, "user", text)
         append_memory(user_id, "assistant", reply)
-
         await send_long_message(update.message, reply)
     except Exception as e:
-        print("Error:", e)
-        await update.message.reply_text("⚠️ حصل خطأ مؤقت.")
+        print("❌ خطأ في المعالجة:", e)
+        traceback.print_exc()
+        await update.message.reply_text(f"⚠️ حصل خطأ: {type(e).__name__}: {e}")
 
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(
     MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
 )
 
-# ========== FastAPI Events ==========
 @app.on_event("startup")
 async def startup():
     await telegram_app.initialize()
 
-# ========== Routes ==========
 @app.get("/")
 async def root():
     return {"status": "running"}
@@ -139,12 +142,10 @@ async def telegram_webhook(request: Request):
     await telegram_app.process_update(update)
     return {"ok": True}
 
-# ========== Run (polling/manual only) ==========
 def run_polling():
     telegram_app.run_polling()
 
 if __name__ == "__main__":
-    # يسمح باستخدام Uvicorn أو polling يدوي (للاختبار المحلي)
     polling_thread = threading.Thread(target=run_polling, daemon=True)
     polling_thread.start()
     port = int(os.environ.get("PORT", 10000))
